@@ -108,6 +108,8 @@ int main(int argc, char *argv[])
     // Set power levels
     nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(30.0)); // 30 dBm for gNB
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(25.0));  // 25 dBm for UE
+    
+    //For troubleshooting the bwpInd error encountered earlier
     nrHelper->UpdateDeviceConfigs(gNbDevs);
     nrHelper->UpdateDeviceConfigs(ueDevs);
 
