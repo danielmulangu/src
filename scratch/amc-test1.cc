@@ -10,11 +10,14 @@
 
 using namespace ns3;
 
+int value_tester=0; //Debugging Purposes
+
 // Callback for DL CQI reports
 void DlCqiReportCallback(uint16_t rnti, uint8_t cqi)
 {
     std::cout << Simulator::Now().GetSeconds() << "s [CQI] RNTI=" << rnti
               << " CQI=" << (uint32_t)cqi << std::endl;
+    value_tester++; //Debugging Purposes
 }
 
 // Callback for SINR reports
@@ -24,6 +27,7 @@ void SinrReportCallback(uint16_t cellId, uint16_t rnti, double rsrp, double sinr
               << " SINR=" << sinr << " dB"
               << " RSRP=" << rsrp << " dBm"
               << " CellId=" << cellId << std::endl;
+    value_tester++; //..
 }
 
 // Callback for PHY RX stats (TB size, MCS)
@@ -33,6 +37,7 @@ void PhyRxCallback(RxPacketTraceParams params)
               << " TB_Size=" << params.m_tbSize
               << " MCS=" << (uint32_t)params.m_mcs
               << " SINR=" << params.m_sinr << " dB" << std::endl;
+    value_tester++; //..
 }
 
 int main(int argc, char *argv[])
@@ -42,6 +47,7 @@ int main(int argc, char *argv[])
 
     LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
     LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
+    //LogComponentEnable("NrGnbMac", LOG_LEVEL_DEBUG);
 
     //Create 2 nodes, 1 UE and 1 gNB
     NodeContainer gNbNodes;
@@ -159,19 +165,23 @@ int main(int argc, char *argv[])
     serverApps.Stop(Seconds(15.0));
     clientApps.Stop(Seconds(15.0));
 
+
     for (uint32_t i = 0; i < ueDevs.GetN(); ++i) {
         Ptr<NrUeNetDevice> ueDev = ueDevs.Get(i)->GetObject<NrUeNetDevice>();
         for (uint32_t j = 0; j < ueDev->GetCcMapSize(); ++j) {
             Ptr<NrUePhy> uePhy = ueDev->GetPhy(j);
             uePhy->TraceConnectWithoutContext("DlCqiReport", MakeCallback(&DlCqiReportCallback));
+
             uePhy->TraceConnectWithoutContext("ReportCurrentCellRsrpSinr", MakeCallback(&SinrReportCallback));
+
             uePhy->TraceConnectWithoutContext("RxPacketTrace", MakeCallback(&PhyRxCallback));
+
         }
     }
 
     Simulator::Stop(Seconds(15.0));
     Simulator::Run();
     Simulator::Destroy();
-
+    std::cout <<"\nValue : "<< value_tester << std::endl; //Debugging Purposes
     return 0;
 }
