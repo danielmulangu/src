@@ -1,47 +1,38 @@
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
 #include "ns3/internet-module.h"
+#include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
 #include "ns3/nr-module.h"
-#include "ns3/nr-helper.h"
 #include "ns3/nr-point-to-point-epc-helper.h"
-using namespace ns3;
+#include "ns3/point-to-point-helper.h"
+#include "ns3/antenna-module.h"
 
-Ptr<NrAmc> g_amcModel;
+using namespace ns3;
 
 // Callback for DL CQI reports
 void DlCqiReportCallback(uint16_t rnti, uint8_t cqi)
 {
-    if (g_amcModel) {
-        uint8_t mcs = g_amcModel->GetMcsFromCqi(cqi);
-        std::cout << Simulator::Now().GetSeconds() << "s RNTI=" << rnti
-                  << " DL_CQI=" << (uint32_t)cqi
-                  << " MCS=" << (uint32_t)mcs << std::endl;
-    }
+    std::cout << Simulator::Now().GetSeconds() << "s [CQI] RNTI=" << rnti
+              << " CQI=" << (uint32_t)cqi << std::endl;
 }
 
-// Callback for SINR reports - simplified
+// Callback for SINR reports
 void SinrReportCallback(uint16_t cellId, uint16_t rnti, double rsrp, double sinr, uint8_t componentCarrierId)
 {
-    std::cout << Simulator::Now().GetSeconds() << "s RNTI=" << rnti
-              << " RSRP=" << rsrp << " dBm"
+    std::cout << Simulator::Now().GetSeconds() << "s [SINR] RNTI=" << rnti
               << " SINR=" << sinr << " dB"
+              << " RSRP=" << rsrp << " dBm"
               << " CellId=" << cellId << std::endl;
 }
 
-// Callback for TX data trace
-void TxDataCallback(Time time)
-{
-    std::cout << Simulator::Now().GetSeconds() << "s TX_Data at time=" << time.GetSeconds() << "s" << std::endl;
-}
-
-// Callback for detailed PHY stats - using correct trace parameters
+// Callback for PHY RX stats (TB size, MCS)
 void PhyRxCallback(RxPacketTraceParams params)
 {
-    std::cout << Simulator::Now().GetSeconds() << "s PHY_RX: TB_Size=" << params.m_tbSize
+    std::cout << Simulator::Now().GetSeconds() << "s [RX] RNTI=" << params.m_rnti
+              << " TB_Size=" << params.m_tbSize
               << " MCS=" << (uint32_t)params.m_mcs
-              << " SINR=" << params.m_sinr << " dB"
-              << " RNTI=" << params.m_rnti << std::endl;
+              << " SINR=" << params.m_sinr << " dB" << std::endl;
 }
 
 int main(int argc, char *argv[])
@@ -49,119 +40,136 @@ int main(int argc, char *argv[])
     CommandLine cmd;
     cmd.Parse(argc, argv);
 
-    // Enable logging for relevant components
-    LogComponentEnable("NrUePhy", LOG_LEVEL_INFO);
-    LogComponentEnable("NrGnbPhy", LOG_LEVEL_INFO);
-    LogComponentEnable("NrUeMac", LOG_LEVEL_INFO);
-    LogComponentEnable("NrGnbMac", LOG_LEVEL_INFO);
+    LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
+    LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
 
-    // Create nodes
+    //Create 2 nodes, 1 UE and 1 gNB
     NodeContainer gNbNodes;
     NodeContainer ueNodes;
     gNbNodes.Create(1);
     ueNodes.Create(1);
 
-    // Mobility - place UE 100m from gNB
+    //Set the mobility
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
-    positionAlloc->Add(Vector(0, 0, 0));    // gNB position
-    positionAlloc->Add(Vector(100, 0, 0));  // UE position
-    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    positionAlloc->Add(Vector(0, 0, 10));
+    positionAlloc->Add(Vector(30, 0, 1.5));
+    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel"); //Standard Mobility
     mobility.SetPositionAllocator(positionAlloc);
     mobility.Install(gNbNodes);
     mobility.Install(ueNodes);
 
-    // NR helper configuration
+    //Set up the EPCHelper
     Ptr<NrPointToPointEpcHelper> epcHelper = CreateObject<NrPointToPointEpcHelper>();
     Ptr<NrHelper> nrHelper = CreateObject<NrHelper>();
     nrHelper->SetEpcHelper(epcHelper);
 
-    // Configure AMC model
-    g_amcModel = CreateObject<NrAmc>();
-    g_amcModel->SetAmcModel(NrAmc::ShannonModel);
-    g_amcModel->SetDlMode();
-    g_amcModel->SetNumRefScPerRb(1);
+    //Set the beamforming as seen in error-model-amc example
+    Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
+    nrHelper->SetBeamformingHelper(idealBeamformingHelper);
+    idealBeamformingHelper->SetAttribute("BeamformingMethod", TypeIdValue(DirectPathBeamforming::GetTypeId()));
 
-    // Configure scheduler
-    nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaRR"));
-    nrHelper->SetSchedulerAttribute("FixedMcsDl", BooleanValue(false));
-    nrHelper->SetSchedulerAttribute("FixedMcsUl", BooleanValue(false));
-    nrHelper->SetGnbMacAttribute("NumRbPerRbg", UintegerValue(4));
+    //Error Model
+    Config::SetDefault("ns3::NrAmc::ErrorModelType", TypeIdValue(TypeId::LookupByName("ns3::NrEesmCcT1")));
+    Config::SetDefault("ns3::NrAmc::AmcModel", EnumValue(NrAmc::ErrorModel));
 
-    // Initialize channel and pathloss
-    nrHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(false));
-
-    // Bandwidth part configuration - 20MHz with numerology 1
     BandwidthPartInfoPtrVector allBwps;
     CcBwpCreator ccBwpCreator;
-    CcBwpCreator::SimpleOperationBandConf bandConf(3.5e9, 20e6, 1, BandwidthPartInfo::UMa);
+    CcBwpCreator::SimpleOperationBandConf bandConf(3.5e9, 100e6, 1, BandwidthPartInfo::UMa);
     OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
-
-    // Initialize operation band
     nrHelper->InitializeOperationBand(&band);
     allBwps = CcBwpCreator::GetAllBwps({band});
 
-    // Install devices
+    //Pathloss
+    nrHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(false));
+    nrHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(0)));
+
+    //Antennas for the UE and gnB
+    nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(2));
+    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(4));
+    nrHelper->SetUeAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
+    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(4));
+    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
+    nrHelper->SetGnbAntennaAttribute("AntennaElement", PointerValue(CreateObject<IsotropicAntennaModel>()));
+
+    //Error model for Uplink and Downlink
+    nrHelper->SetDlErrorModel("ns3::NrEesmCcT1");
+    nrHelper->SetUlErrorModel("ns3::NrEesmCcT1");
+
+    //Install the devices
     NetDeviceContainer gNbDevs = nrHelper->InstallGnbDevice(gNbNodes, allBwps);
     NetDeviceContainer ueDevs = nrHelper->InstallUeDevice(ueNodes, allBwps);
 
-    // Set power levels
-    nrHelper->SetGnbPhyAttribute("TxPower", DoubleValue(30.0)); // 30 dBm for gNB
-    nrHelper->SetUePhyAttribute("TxPower", DoubleValue(25.0));  // 25 dBm for UE
-    
-    //For troubleshooting the bwpInd error encountered earlier
-    nrHelper->UpdateDeviceConfigs(gNbDevs);
-    nrHelper->UpdateDeviceConfigs(ueDevs);
-
-    // IP stack
-    InternetStackHelper internet;
-    internet.Install(ueNodes);
-    Ipv4InterfaceContainer ueIpIfaces = epcHelper->AssignUeIpv4Address(ueDevs);
-
-    // Set default gateway
-    for (uint32_t j = 0; j < ueNodes.GetN(); ++j) {
-        Ptr<Ipv4> ipv4 = ueNodes.Get(j)->GetObject<Ipv4>();
-        Ptr<Ipv4StaticRouting> ueStaticRouting = ipv4->GetRoutingProtocol()->GetObject<Ipv4StaticRouting>();
-        if (ueStaticRouting) {
-            ueStaticRouting->SetDefaultRoute(epcHelper->GetUeDefaultGatewayAddress(), 1);
-        }
+    for (uint32_t i = 0; i < gNbDevs.GetN(); ++i)
+    {
+        DynamicCast<NrGnbNetDevice>(gNbDevs.Get(i))->UpdateConfig();
     }
 
-    // Attach UEs to gNBs
+    for (uint32_t i = 0; i < ueDevs.GetN(); ++i)
+    {
+        DynamicCast<NrUeNetDevice>(ueDevs.Get(i))->UpdateConfig();
+    }
+
+
+    Ptr<Node> pgw = epcHelper->GetPgwNode();
+    NodeContainer remoteHostContainer;
+    remoteHostContainer.Create(1);
+    Ptr<Node> remoteHost = remoteHostContainer.Get(0);
+    InternetStackHelper internet;
+    internet.Install(remoteHostContainer);
+
+    PointToPointHelper p2ph;
+    p2ph.SetDeviceAttribute("DataRate", DataRateValue(DataRate("100Gb/s")));
+    p2ph.SetDeviceAttribute("Mtu", UintegerValue(2500));
+    p2ph.SetChannelAttribute("Delay", TimeValue(Seconds(0.000)));
+    NetDeviceContainer internetDevices = p2ph.Install(pgw, remoteHost);
+    Ipv4AddressHelper ipv4h;
+    ipv4h.SetBase("1.0.0.0", "255.0.0.0");
+    Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign(internetDevices);
+
+    Ipv4StaticRoutingHelper ipv4RoutingHelper;
+    Ptr<Ipv4StaticRouting> remoteHostStaticRouting = ipv4RoutingHelper.GetStaticRouting(remoteHost->GetObject<Ipv4>());
+    remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.0.0.0"), 1);
+
+    internet.Install(ueNodes);
+    Ipv4InterfaceContainer ueIpIface = epcHelper->AssignUeIpv4Address(ueDevs);
+    for (uint32_t j = 0; j < ueNodes.GetN(); ++j) {
+        Ptr<Ipv4StaticRouting> ueStaticRouting = ipv4RoutingHelper.GetStaticRouting(ueNodes.Get(j)->GetObject<Ipv4>());
+        ueStaticRouting->SetDefaultRoute(epcHelper->GetUeDefaultGatewayAddress(), 1);
+    }
+
     nrHelper->AttachToClosestGnb(ueDevs, gNbDevs);
 
-    // Add UDP traffic between gNB and UE
+    //Generate Traffic
     uint16_t dlPort = 1234;
-    PacketSinkHelper dlPacketSinkHelper("ns3::UdpSocketFactory",
-                                     InetSocketAddress(Ipv4Address::GetAny(), dlPort));
-    ApplicationContainer dlSinkApp = dlPacketSinkHelper.Install(ueNodes.Get(0));
-    dlSinkApp.Start(Seconds(1.0));
+    ApplicationContainer clientApps;
+    ApplicationContainer serverApps;
 
-    UdpClientHelper dlClient(ueIpIfaces.GetAddress(0), dlPort);
-    dlClient.SetAttribute("Interval", TimeValue(MilliSeconds(10))); // More frequent traffic
+    UdpServerHelper dlPacketSinkHelper(dlPort);
+    serverApps.Add(dlPacketSinkHelper.Install(ueNodes.Get(0)));
+
+    UdpClientHelper dlClient(ueIpIface.GetAddress(0), dlPort);
+    dlClient.SetAttribute("Interval", TimeValue(MilliSeconds(15)));
+    dlClient.SetAttribute("PacketSize", UintegerValue(2048));
     dlClient.SetAttribute("MaxPackets", UintegerValue(1000));
-    dlClient.SetAttribute("PacketSize", UintegerValue(1024)); // Larger packets
-    ApplicationContainer dlClientApp = dlClient.Install(gNbNodes.Get(0));
-    dlClientApp.Start(Seconds(1.1));
+    clientApps.Add(dlClient.Install(remoteHost));
 
-    // Connect trace sources for UE PHY - focus on working traces
+    serverApps.Start(Seconds(1.0));
+    clientApps.Start(Seconds(1.01));
+    serverApps.Stop(Seconds(15.0));
+    clientApps.Stop(Seconds(15.0));
+
     for (uint32_t i = 0; i < ueDevs.GetN(); ++i) {
         Ptr<NrUeNetDevice> ueDev = ueDevs.Get(i)->GetObject<NrUeNetDevice>();
         for (uint32_t j = 0; j < ueDev->GetCcMapSize(); ++j) {
             Ptr<NrUePhy> uePhy = ueDev->GetPhy(j);
-
-            // Connect to DL CQI trace
             uePhy->TraceConnectWithoutContext("DlCqiReport", MakeCallback(&DlCqiReportCallback));
-
-            // Connect to SINR trace
             uePhy->TraceConnectWithoutContext("ReportCurrentCellRsrpSinr", MakeCallback(&SinrReportCallback));
+            uePhy->TraceConnectWithoutContext("RxPacketTrace", MakeCallback(&PhyRxCallback));
         }
     }
 
-    // Enable NR traces for comprehensive logging
-    nrHelper->EnableTraces();
-
-    Simulator::Stop(Seconds(30.0));
+    Simulator::Stop(Seconds(15.0));
     Simulator::Run();
     Simulator::Destroy();
 
