@@ -3,23 +3,18 @@
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/applications-module.h"
-#include "ns3/nr-helper.h"
-#include "ns3/nr-amc.h"
-#include "ns3/cc-bwp-helper.h"
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
-#include "ns3/internet-apps-module.h"
 #include "ns3/internet-module.h"
-#include "ns3/ipv4-global-routing-helper.h"
 #include "ns3/log.h"
 #include "ns3/mobility-module.h"
-#include "ns3/nr-helper.h"
 #include "ns3/nr-module.h"
 #include "ns3/nr-point-to-point-epc-helper.h"
 #include "ns3/point-to-point-helper.h"
 #include <ns3/antenna-module.h>
 #include <cmath>
 #include <chrono>
+
 using namespace ns3;
 
 int test_counter=0;
@@ -75,12 +70,12 @@ void DlCtrlSinrCallback(uint16_t cellId, uint16_t rnti, double sinr, uint16_t bw
     // Calculate Transport Block size (layers=1)
     uint32_t tbs = amc->CalculateTbSize (mcs, 1, numRb);
     std::cout << "Time " << Simulator::Now().GetSeconds()
-              << "s:\tUE RNTI=" << rnti
-              << ",\tCellId=" << cellId
-              << ",\tDL Ctrl SINR=" << sinr << " dB,"
-              << "\tCQI " <<static_cast<uint32_t>(cqi)
-              << "\tMCS " << static_cast<uint32_t>(mcs)
-              << "\tTB Size " << tbs
+              << "s:   UE RNTI=" << rnti
+              << ",   CellId=" << cellId
+              << ",   DL Ctrl SINR=" << sinr << " dB,"
+              << "   CQI " <<static_cast<uint32_t>(cqi)
+              << "   MCS " << static_cast<uint32_t>(mcs)
+              << "   TB Size " << tbs
               << std::endl;
     test_counter++;
 }
@@ -88,7 +83,7 @@ void DlCtrlSinrCallback(uint16_t cellId, uint16_t rnti, double sinr, uint16_t bw
 
 //Position
 static Ptr<ListPositionAllocator>
-GetGnbPositions(double gNbHeight = 10.0)
+GetGnbPositions(double gNbHeight)
 {
     Ptr<ListPositionAllocator> pos = CreateObject<ListPositionAllocator>();
     pos->Add(Vector(0.0, 0.0, gNbHeight));
@@ -97,7 +92,7 @@ GetGnbPositions(double gNbHeight = 10.0)
 }
 
 static Ptr<ListPositionAllocator>
-GetUePositions(double ueY, double ueHeight = 1.5)
+GetUePositions(double ueY, double ueHeight)
 {
     Ptr<ListPositionAllocator> pos = CreateObject<ListPositionAllocator>();
     pos->Add(Vector(0.0, ueY, ueHeight));
@@ -117,12 +112,31 @@ PrintRxPkt([[maybe_unused]] std::string context, Ptr<const Packet> pkt)
     packetsTime.push_back((Simulator::Now() - seqTs.GetTs()).GetMicroSeconds());
 }
 
+//Getting the Nodes positions (for debugging purposes)
+static Vector GetFinalPosition (Ptr <Node> simNode)
+{
+ Ptr<MobilityModel> mobility = simNode->GetObject<MobilityModel> ();
+    if (!mobility)
+    {
+        NS_FATAL_ERROR("Node has no mobility");
+    }
+    return mobility->GetPosition();
+}
+//Printing the Nodes positions (For debugging purposes, again)
+static void PrintPositions(NodeContainer sim_node)
+{
+    for (uint32_t i=0; i< sim_node.GetN();++i)
+    {
+        Vector position_s = GetFinalPosition(sim_node.Get(i));
+        std::cout <<"Position (X,Y,Z)" << position_s << std::endl;
+    }
+}
 
 int
 main (int argc, char *argv[])
 {
   // Simulation parameters
-    double simDuration = 180.0; // seconds
+    double simDuration = 30.0; // seconds
     double totalTxPower = 3;
     uint16_t numerologyBwp = 4;
     double centralFrequencyBand = 28e9;
@@ -164,17 +178,28 @@ main (int argc, char *argv[])
   NodeContainer gnbNodes; gnbNodes.Create (gNbNum);
   NodeContainer ueNodes;  ueNodes.Create (ueNum);
 
-    //Position
+    //Position: Set the positions of the nodes using the height and coordinates of the two nodes.
     Ptr<ListPositionAllocator> gNbPositionAlloc = GetGnbPositions(gNbHeight);
     Ptr<ListPositionAllocator> uePositionAlloc = GetUePositions(ueY, ueHeight);
 
   // Mobility
   MobilityHelper mobility;
+    MobilityHelper uemob;
   mobility.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
   mobility.SetPositionAllocator(gNbPositionAlloc);
   mobility.Install (gnbNodes);
-  mobility.SetPositionAllocator(uePositionAlloc);
-  mobility.Install (ueNodes);
+    uemob.SetMobilityModel ("ns3::ConstantVelocityMobilityModel"); // Set the model  for ueNode
+    uemob.Install (ueNodes);
+    std::cout <<"UE initial position:"<<std::endl;
+    PrintPositions(ueNodes);
+    std:: cout<<"GNb initial position:"<<std::endl;
+    PrintPositions(gnbNodes);
+    for (uint n = 0; n < ueNodes.GetN (); n++)
+    {
+        Ptr<ConstantVelocityMobilityModel> mob = ueNodes.Get(n)->GetObject<ConstantVelocityMobilityModel>();
+        // Set the desired velocity
+        mob->SetVelocity(Vector(1.0, 2.0, 0.0)); // Moving at 1 m/s in the x direction and 5 m/s in the y direction
+    }
 
   // Set up a minimal 5G “core” (EPC/NGC) and the NR helper
   Ptr<NrPointToPointEpcHelper> nrEpcHelper = CreateObject<NrPointToPointEpcHelper>();
@@ -236,7 +261,7 @@ main (int argc, char *argv[])
     // Both DL and UL AMC will have the same model behind.
     nrHelper->SetGnbDlAmcAttribute(
         "AmcModel",
-        EnumValue(NrAmc::ErrorModel)); // NrAmc::ShannonModel or NrAmc::ErrorModel
+        EnumValue(NrAmc::ShannonModel)); // NrAmc::ShannonModel or NrAmc::ErrorModel
     nrHelper->SetGnbUlAmcAttribute(
         "AmcModel",
         EnumValue(NrAmc::ErrorModel)); // NrAmc::ShannonModel or NrAmc::ErrorModel
@@ -339,6 +364,7 @@ main (int argc, char *argv[])
     // start UDP server and client apps
     serverApps.Start(udpAppStartTime);
     clientApps.Start(udpAppStartTime);
+    auto start = std::chrono::steady_clock::now();
     serverApps.Stop(Seconds(simDuration));
     clientApps.Stop(Seconds(simDuration));
 
@@ -351,11 +377,13 @@ main (int argc, char *argv[])
     uePhy->TraceConnectWithoutContext("DlCtrlSinr", MakeCallback(&DlCtrlSinrCallback));
 
   Simulator::Stop (Seconds (simDuration));
-    auto start = std::chrono::steady_clock::now();
+
 
   Simulator::Run ();
-
-    auto end = std::chrono::steady_clock::now();
+    std::cout <<"UE initial position:"<<std::endl;
+    PrintPositions(ueNodes);
+    std:: cout<<"GNb initial position:"<<std::endl;
+    PrintPositions(gnbNodes);
 
     uint64_t sum = 0;
     uint32_t cont = 0;
@@ -370,30 +398,24 @@ main (int argc, char *argv[])
     std::cout << "Packets received: " << packetsTime.size() << std::endl;
     std::cout << "Counter (packets not affected by reordering): " << +cont << std::endl;
 
-    if (!packetsTime.empty() && cont > 0)
-    {
-        std::cout << "Average e2e latency (over all received packets): " << sum / packetsTime.size()
-                  << " us" << std::endl;
-        std::cout << "Average e2e latency (over counter): " << sum / cont << " us" << std::endl;
-    }
-    else
-    {
-        std::cout << "Average e2e latency: Not Available" << std::endl;
-    }
-
     for (auto it = serverApps.Begin(); it != serverApps.End(); ++it)
     {
         uint64_t recv = DynamicCast<UdpServer>(*it)->GetReceived();
-        std::cout << "Sent: " << packets << "\nRecv: " << recv << "\nLost: " << packets - recv
+        std::cout << "Sent: " << packets
+                  << "\nRecv: " << recv
+                  << "\nLost: " << packets - recv
                   << " pkts, ( " << (static_cast<double>(packets - recv) / packets) * 100.0
                   << " % )" << std::endl;
 
     }
-
+    std::cout <<"UE Final position:"<<std::endl;
+    PrintPositions(ueNodes);
+    std::cout <<"GNb Final position:"<<std::endl;
+    PrintPositions(gnbNodes);
   Simulator::Destroy ();
-
+    auto end = std::chrono::steady_clock::now();
     std::cout << "Running time: "
-                  << std::chrono::duration_cast<std::chrono::seconds>(end - start).count() << " s."
+                << std::chrono::duration_cast<std::chrono::seconds>(end - start)
                   << std::endl;
     if (test_counter!=0){std::cout << "\nCounter triggered"<< std::endl;}
     else {std::cout << "Counter not triggered"<< std::endl;}
