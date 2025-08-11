@@ -1,7 +1,8 @@
 #################################################################################
-
 Side Note: This folder contains the content of my scratch folder on my local ns-3.
 #################################################################################
+
+The scratch folder contains all the programs i have been testing in NS3, including all the modified examples and test samples.
 
 To run the amc-X files, the nr module should be installed in ns3
 
