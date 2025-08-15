@@ -13,4 +13,6 @@ In order to run some of the examples/programs, all the following libraries/modul
 2. NR
 3. TARA
 
+Note: The installation of such mdule can still be found on the respective module VCS.
+
 
