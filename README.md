@@ -11,7 +11,7 @@ In order to run some of the examples/programs, all the following libraries/modul
 
 1. NS3-AI
 2. NR
-3. TARA
+3. TARA (from the paper trajectory-aware rate adaptation)
 
 Note: The installation of such mdule can still be found on the respective module VCS (gitlab/github).
 
